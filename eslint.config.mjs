@@ -6,12 +6,6 @@ export default tseslint.config(
   ...tseslint.configs.strictTypeChecked,
   {
     rules: {
-      '@typescript-eslint/consistent-type-assertions': [
-        'error',
-        {
-          assertionStyle: 'never',
-        },
-      ],
       '@typescript-eslint/no-unsafe-calls': 'off',
       '@typescript-eslint/no-unused-vars': [
         'error',
