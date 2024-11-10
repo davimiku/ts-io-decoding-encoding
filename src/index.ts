@@ -33,15 +33,14 @@ interface ShapeNumber extends Shape {
   decode(input: unknown): number
 }
 
-interface ShapeArray<T> extends Shape {
+interface ShapeArray<ElementShape extends Shape> extends Shape {
   __type: 'array'
-  // elementShape: S
-  decode(input: unknown): T[]
+  decode(input: unknown): Infer<ElementShape>[]
 }
 
-interface ShapeRecord<T> extends Shape {
+interface ShapeRecord<ValueShape extends Shape> extends Shape {
   __type: 'record'
-  decode(input: unknown): Record<string, T>
+  decode(input: unknown): Record<string, Infer<ValueShape>>
 }
 
 interface ShapeStruct<Fields extends Record<string, Shape>> extends Shape {
@@ -49,12 +48,9 @@ interface ShapeStruct<Fields extends Record<string, Shape>> extends Shape {
   decode(input: unknown): InferStruct<Fields>
 }
 
-interface ShapeUnion<
-  TagName extends string,
-  Variants extends Record<string, Shape>,
-> extends Shape {
+interface ShapeUnion<Variants extends Record<string, Shape>> extends Shape {
   __type: 'union'
-  decode(input: unknown): InferUnion<TagName, Variants>
+  decode(input: unknown): InferUnion<Variants>
 }
 
 export type Infer<S extends Shape> = S extends ShapeUnknown
@@ -65,24 +61,23 @@ export type Infer<S extends Shape> = S extends ShapeUnknown
       ? string
       : S extends ShapeNumber
         ? number
-        : S extends ShapeArray<infer Element>
-          ? Element[]
-          : S extends ShapeRecord<infer Value>
-            ? Record<string, Value>
+        : S extends ShapeArray<infer ElementShape>
+          ? Infer<ElementShape>[]
+          : S extends ShapeRecord<infer ValueShape>
+            ? Record<string, Infer<ValueShape>>
             : S extends ShapeStruct<infer Fields>
               ? InferStruct<Fields>
-              : S extends ShapeUnion<infer TagName, infer Variants>
-                ? InferUnion<TagName, Variants>
+              : S extends ShapeUnion<infer Variants>
+                ? InferUnion<Variants>
                 : never
 
 type InferStruct<Fields extends Record<string, Shape>> = {
   [Key in keyof Fields]: Infer<Fields[Key]>
 }
 
-type InferUnion<
-  TagName extends string,
-  Variants extends Record<string, Shape>,
-> = {}
+type InferUnion<Variants extends Record<string, Shape>> = {
+  [Key in keyof Variants]: [Key, Infer<Variants[Key]>]
+}[keyof Variants]
 
 function unknown(): ShapeUnknown {
   return {
@@ -126,17 +121,15 @@ function number(): ShapeNumber {
   }
 }
 
-function array<S extends Shape, El = Infer<S>>(
-  elementShape: Shape<El>,
-): ShapeArray<El> {
+function array<S extends Shape>(elementShape: S): ShapeArray<S> {
   return {
     __type: 'array',
-    decode(input: unknown): El[] {
+    decode(input: unknown): Infer<S>[] {
       if (!Array.isArray(input)) {
         throw new Error('oops!')
       }
 
-      return input.map(elementShape.decode)
+      return input.map((el) => elementShape.decode(el) as Infer<S>)
     },
   }
 }
@@ -145,12 +138,10 @@ type GetElementType<Arr extends unknown[]> =
   Arr extends Array<infer T> ? T : never
 type Test1111 = GetElementType<string[]>
 
-function record<S extends Shape, El = Infer<S>>(
-  elementShape: Shape<El>,
-): ShapeRecord<El> {
+function record<S extends Shape>(elementShape: S): ShapeRecord<S> {
   return {
     __type: 'record',
-    decode(input: unknown): Record<string, El> {
+    decode(input: unknown): Record<string, Infer<S>> {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
         throw new Error('oops!')
       }
@@ -158,14 +149,12 @@ function record<S extends Shape, El = Infer<S>>(
       return Object.fromEntries(
         Object.entries(input).map(([key, value]) => [
           key,
-          elementShape.decode(value),
+          elementShape.decode(value) as Infer<S>,
         ]),
       )
     },
   }
 }
-
-const UnknownRecord = record(unknown())
 
 function struct<Fields extends Record<string, Shape>>(
   fieldShapes: Fields,
@@ -173,22 +162,38 @@ function struct<Fields extends Record<string, Shape>>(
   return {
     __type: 'struct',
     decode(input: unknown): InferStruct<Fields> {
-      const record = UnknownRecord.decode(input)
+      const inputRecord = record(unknown()).decode(input)
 
-      // The generic types don't survive through Object.entries, so a type
-      // assertion keeps us on track here
-      // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
       return Object.fromEntries(
         Object.entries(fieldShapes).map(([key, shape]) => [
           key,
-          shape.decode(record[key]),
+          shape.decode(inputRecord[key]),
         ]),
       ) as InferStruct<Fields>
     },
   }
 }
 
-function union() {}
+function union<Variants extends Record<string, Shape>>(
+  variants: Variants,
+): ShapeUnion<Variants> {
+  return {
+    __type: 'union',
+    decode(input: unknown): InferUnion<Variants> {
+      if (!Array.isArray(input) || input.length !== 2) {
+        throw new Error('oops!')
+      }
+
+      const [tag, value] = input as [unknown, unknown]
+
+      if (typeof tag !== 'string' || !Object.keys(variants).includes(tag)) {
+        throw new Error('oops!')
+      }
+
+      return [tag, variants[tag].decode(value) as Infer<Variants[typeof tag]>]
+    },
+  }
+}
 
 export const IO = {
   unknown: unknown(),
@@ -198,6 +203,7 @@ export const IO = {
   array,
   record,
   struct,
+  union,
 } as const
 
 if (import.meta.vitest) {
@@ -231,11 +237,11 @@ if (import.meta.vitest) {
 
   describe('Number', () => {
     test('Number decoding', () => {
-      expect(IO.number.decode(42)).toStrictEqual(42)
+      expect(IO.number.decode(16)).toStrictEqual(16)
       expect(IO.number.decode(0)).toStrictEqual(0)
       expect(IO.number.decode(-0)).toStrictEqual(-0)
 
-      expect(IO.number.decode(-42)).toStrictEqual(-42)
+      expect(IO.number.decode(-16)).toStrictEqual(-16)
       type Expected = number
       type _Test = Expect<Equal<Infer<typeof IO.number>, Expected>>
     })
@@ -291,7 +297,9 @@ if (import.meta.vitest) {
       })
 
       type Expected = Record<string, string>
-      type _Test = Expect<Equal<Infer<typeof StringRecord>, Expected>>
+      type Actual = Infer<typeof StringRecord>
+
+      type _Test = Expect<Equal<Actual, Expected>>
     })
 
     test('nested Record decoding', () => {
@@ -301,10 +309,10 @@ if (import.meta.vitest) {
         StringRecordRecord.decode({ a: { aa: 'aaa' }, b: { bb: 'bbb' } }),
       ).toStrictEqual({ a: { aa: 'aaa' }, b: { bb: 'bbb' } })
 
-      type Expected = Record<string, string>
-      type _Test = Expect<
-        Equal<Infer<typeof StringRecordRecord>, Record<string, Expected>>
-      >
+      type Expected = Record<string, Record<string, string>>
+      type Actual = Infer<typeof StringRecordRecord>
+
+      type _Test = Expect<Equal<Actual, Expected>>
     })
   })
 
@@ -321,7 +329,9 @@ if (import.meta.vitest) {
         x: number
         y: number
       }
-      type _Test = Expect<Equal<Infer<typeof Point>, Expected>>
+      type Actual = Infer<typeof Point>
+
+      type _Test = Expect<Equal<Actual, Expected>>
     })
 
     test('nested Struct decoding', () => {
@@ -338,18 +348,111 @@ if (import.meta.vitest) {
         NestedPoint.decode({ start: { x: 1, y: 2 }, end: { x: 10, y: 20 } }),
       ).toStrictEqual({ start: { x: 1, y: 2 }, end: { x: 10, y: 20 } })
 
-      type _Test = Expect<
-        Equal<
-          Infer<typeof NestedPoint>,
-          { start: { x: number; y: number }; end: { x: number; y: number } }
-        >
-      >
+      type Expected = {
+        start: {
+          x: number
+          y: number
+        }
+        end: {
+          x: number
+          y: number
+        }
+      }
+      type Actual = Infer<typeof NestedPoint>
+
+      type _Test = Expect<Equal<Actual, Expected>>
     })
 
     test('Struct type inference', () => {
-      expect(true).toBe(true);
+      expect(true).toBe(true)
 
-      type _Test111 = InferStruct<{x: ShapeNumber, s: ShapeString, a: ShapeArray<ShapeBoolean> }>
+      type Expected = {
+        x: number
+        s: string
+        a: boolean[]
+        r: Record<string, number>
+      }
+      type Actual = InferStruct<{
+        x: ShapeNumber
+        s: ShapeString
+        a: ShapeArray<ShapeBoolean>
+        r: ShapeRecord<ShapeNumber>
+      }>
+
+      type _Test = Expect<Equal<Actual, Expected>>
+    })
+  })
+
+  describe('Union', () => {
+    test('Union decoding', () => {
+      const NumOrStr = IO.union({
+        num: IO.number,
+        str: IO.string,
+      })
+
+      expect(NumOrStr.decode(['num', 16])).toStrictEqual(['num', 16])
+      expect(NumOrStr.decode(['str', 'hello'])).toStrictEqual(['str', 'hello'])
+
+      type Expected = ['num', number] | ['str', string]
+      type Actual = Infer<typeof NumOrStr>
+
+      type _Test = Expect<Equal<Actual, Expected>>
+    })
+
+    test('nested Union decoding', () => {
+      const Point = IO.struct({
+        x: IO.number,
+        y: IO.number,
+      })
+      const ClickEvent = IO.struct({
+        point: Point,
+        isDoubleClick: IO.boolean,
+      })
+      const DragEvent = IO.struct({
+        start: Point,
+        end: Point,
+        duration: IO.number,
+      })
+      const MouseEvent = IO.union({
+        click: ClickEvent,
+        drag: DragEvent,
+      })
+
+      expect(
+        MouseEvent.decode([
+          'click',
+          { isDoubleClick: false, point: { x: 100, y: 200 } },
+        ]),
+      ).toStrictEqual([
+        'click',
+        { isDoubleClick: false, point: { x: 100, y: 200 } },
+      ])
+
+      type Expected =
+        | ['click', Infer<typeof ClickEvent>]
+        | ['drag', Infer<typeof DragEvent>]
+      type Actual = Infer<typeof MouseEvent>
+
+      type _Test = Expect<Equal<Actual, Expected>>
+    })
+
+    test('Union type inference', () => {
+      expect(true).toBe(true)
+
+      type Expected =
+        | ['x', number]
+        | ['s', string]
+        | ['a', boolean[]]
+        | ['r', Record<string, number>]
+
+      type Actual = InferUnion<{
+        x: ShapeNumber
+        s: ShapeString
+        a: ShapeArray<ShapeBoolean>
+        r: ShapeRecord<ShapeNumber>
+      }>
+
+      type _Test = Expect<Equal<Actual, Expected>>
     })
   })
 }
