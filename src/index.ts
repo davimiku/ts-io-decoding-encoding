@@ -212,6 +212,7 @@ if (import.meta.vitest) {
   // https://www.totaltypescript.com/how-to-test-your-types
   type Expect<T extends true> = T
   // prettier-ignore
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
   type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2)
       ? true
       : false
