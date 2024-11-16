@@ -226,7 +226,9 @@ if (import.meta.vitest) {
       expect(unknown.decode('no idea')).toStrictEqual('no idea')
 
       type Expected = unknown
-      type _Test = Expect<Equal<Infer<typeof unknown>, Expected>>
+      type Actual = Infer<typeof unknown>
+
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 
@@ -236,7 +238,9 @@ if (import.meta.vitest) {
       expect(boolean.decode(false)).toStrictEqual(false)
 
       type Expected = boolean
-      type _Test = Expect<Equal<Infer<typeof boolean>, Expected>>
+      type Actual = Infer<typeof boolean>
+
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 
@@ -248,7 +252,9 @@ if (import.meta.vitest) {
       expect(number.decode(-16)).toStrictEqual(-16)
 
       type Expected = number
-      type _Test = Expect<Equal<Infer<typeof number>, Expected>>
+      type Actual = Infer<typeof number>
+
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 
@@ -258,7 +264,9 @@ if (import.meta.vitest) {
       expect(string.decode('hello')).toStrictEqual('hello')
 
       type Expected = string
-      type _Test = Expect<Equal<Infer<typeof string>, Expected>>
+      type Actual = Infer<typeof string>
+
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 
@@ -269,7 +277,9 @@ if (import.meta.vitest) {
       expect(StringArray.decode(['a', 'b', 'c'])).toStrictEqual(['a', 'b', 'c'])
 
       type Expected = string[]
-      type _Test = Expect<Equal<Infer<typeof StringArray>, Expected>>
+      type Actual = Infer<typeof StringArray>
+
+      type _Test = Expect<Equal<Expected, Actual>>
     })
 
     test('nested Array decoding', () => {
@@ -288,7 +298,9 @@ if (import.meta.vitest) {
       ])
 
       type Expected = string[][]
-      type _Test = Expect<Equal<Infer<typeof StringArrayArray>, Expected>>
+      type Actual = Infer<typeof StringArrayArray>
+
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 
@@ -304,7 +316,7 @@ if (import.meta.vitest) {
       type Expected = Record<string, string>
       type Actual = Infer<typeof StringRecord>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
 
     test('nested Record decoding', () => {
@@ -317,7 +329,7 @@ if (import.meta.vitest) {
       type Expected = Record<string, Record<string, string>>
       type Actual = Infer<typeof StringRecordRecord>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 
@@ -336,7 +348,7 @@ if (import.meta.vitest) {
       }
       type Actual = Infer<typeof Point>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
 
     test('nested Struct decoding', () => {
@@ -365,7 +377,7 @@ if (import.meta.vitest) {
       }
       type Actual = Infer<typeof NestedPoint>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
 
     test('Struct type inference', () => {
@@ -384,7 +396,7 @@ if (import.meta.vitest) {
         r: ShapeRecord<ShapeNumber>
       }>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 
@@ -401,7 +413,7 @@ if (import.meta.vitest) {
       type Expected = ['num', number] | ['str', string]
       type Actual = Infer<typeof NumOrStr>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
 
     test('nested Union decoding', () => {
@@ -438,7 +450,7 @@ if (import.meta.vitest) {
         | ['drag', Infer<typeof DragEvent>]
       type Actual = Infer<typeof MouseEvent>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
 
     test('Union type inference', () => {
@@ -457,7 +469,7 @@ if (import.meta.vitest) {
         r: ShapeRecord<ShapeNumber>
       }>
 
-      type _Test = Expect<Equal<Actual, Expected>>
+      type _Test = Expect<Equal<Expected, Actual>>
     })
   })
 }
