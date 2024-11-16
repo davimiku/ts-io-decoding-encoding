@@ -1,149 +1,162 @@
-type ShapeType =
-  | 'unknown'
-  | 'boolean'
-  | 'number'
-  | 'string'
-  | 'array'
-  | 'record'
-  | 'struct'
-  | 'union'
-
-interface Shape<T = unknown> {
-  readonly __type: ShapeType
+interface Shape<T> {
+  readonly __tag:
+    | 'unknown'
+    | 'boolean'
+    | 'number'
+    | 'string'
+    | 'bigint'
+    | 'array'
+    | 'record'
+    | 'struct'
+    | 'union'
   readonly decode: (input: unknown) => T
 }
 
-interface ShapeUnknown extends Shape {
-  readonly __type: 'unknown'
-  readonly decode: (input: unknown) => unknown
+interface ShapeUnknown extends Shape<unknown> {
+  readonly __tag: 'unknown'
 }
 
-interface ShapeBoolean extends Shape {
-  readonly __type: 'boolean'
-  readonly decode: (input: unknown) => boolean
+interface ShapeBoolean extends Shape<boolean> {
+  readonly __tag: 'boolean'
 }
 
-interface ShapeString extends Shape {
-  readonly __type: 'string'
-  readonly decode: (input: unknown) => string
+interface ShapeNumber extends Shape<number> {
+  readonly __tag: 'number'
 }
 
-interface ShapeNumber extends Shape {
-  __type: 'number'
-  decode(input: unknown): number
+interface ShapeString extends Shape<string> {
+  readonly __tag: 'string'
 }
 
-interface ShapeArray<ElementShape extends Shape> extends Shape {
-  __type: 'array'
-  decode(input: unknown): Infer<ElementShape>[]
+interface ShapeBigInt extends Shape<bigint> {
+  readonly __tag: 'bigint'
 }
 
-interface ShapeRecord<ValueShape extends Shape> extends Shape {
-  __type: 'record'
-  decode(input: unknown): Record<string, Infer<ValueShape>>
+interface ShapeArray<S extends Shape<unknown>> extends Shape<Infer<S>[]> {
+  readonly __tag: 'array'
 }
 
-interface ShapeStruct<Fields extends Record<string, Shape>> extends Shape {
-  __type: 'struct'
-  decode(input: unknown): InferStruct<Fields>
+// prettier-ignore
+interface ShapeRecord<S extends Shape<unknown>> extends Shape<Record<string, Infer<S>>> {
+  readonly __tag: 'record'
 }
 
-interface ShapeUnion<Variants extends Record<string, Shape>> extends Shape {
-  __type: 'union'
-  decode(input: unknown): InferUnion<Variants>
+type StructFields = Record<string, Shape<unknown>>
+
+// prettier-ignore
+interface ShapeStruct<Fields extends StructFields> extends Shape<InferStruct<Fields>> {
+  readonly __tag: 'struct'
 }
 
-export type Infer<S extends Shape> = S extends ShapeUnknown
+type UnionVariants = Record<string, Shape<unknown>>
+
+// prettier-ignore
+interface ShapeUnion<Variants extends UnionVariants> extends Shape<InferUnion<Variants>> {
+  readonly __tag: 'union'
+}
+
+export type Infer<S extends Shape<unknown>> = S extends ShapeUnknown
   ? unknown
   : S extends ShapeBoolean
     ? boolean
-    : S extends ShapeString
-      ? string
-      : S extends ShapeNumber
-        ? number
-        : S extends ShapeArray<infer ElementShape>
-          ? Infer<ElementShape>[]
-          : S extends ShapeRecord<infer ValueShape>
-            ? Record<string, Infer<ValueShape>>
-            : S extends ShapeStruct<infer Fields>
-              ? InferStruct<Fields>
-              : S extends ShapeUnion<infer Variants>
-                ? InferUnion<Variants>
-                : never
+    : S extends ShapeNumber
+      ? number
+      : S extends ShapeString
+        ? string
+        : S extends ShapeBigInt
+          ? bigint
+          : S extends ShapeArray<infer ElementShape>
+            ? Infer<ElementShape>[]
+            : S extends ShapeRecord<infer ValueShape>
+              ? Record<string, Infer<ValueShape>>
+              : S extends ShapeStruct<infer Fields>
+                ? InferStruct<Fields>
+                : S extends ShapeUnion<infer Variants>
+                  ? InferUnion<Variants>
+                  : never
 
-type InferStruct<Fields extends Record<string, Shape>> = {
+type InferStruct<Fields extends StructFields> = {
   [Key in keyof Fields]: Infer<Fields[Key]>
 }
 
-type InferUnion<Variants extends Record<string, Shape>> = {
+type InferUnion<Variants extends UnionVariants> = {
   [Key in keyof Variants]: [Key, Infer<Variants[Key]>]
 }[keyof Variants]
 
-function unknown(): ShapeUnknown {
-  return {
-    __type: 'unknown',
-    decode: (input: unknown): unknown => input,
-  }
+export const unknown: ShapeUnknown = {
+  __tag: 'unknown',
+  decode: (input: unknown): unknown => input,
+} as const
+
+export const boolean: ShapeBoolean = {
+  __tag: 'boolean',
+  decode: (input: unknown): boolean => {
+    if (typeof input !== 'boolean') {
+      throw new Error('oopsy whoopsy!')
+    }
+    return input
+  },
+} as const
+
+export const number: ShapeNumber = {
+  __tag: 'number',
+  decode(input: unknown): number {
+    if (
+      typeof input !== 'number' ||
+      Number.isNaN(input) ||
+      !Number.isFinite(input)
+    ) {
+      throw new Error('oopsy whoopsy!')
+    }
+    return input
+  },
 }
 
-function boolean(): ShapeBoolean {
-  return {
-    __type: 'boolean',
-    decode: (input: unknown): boolean => typeof input === 'boolean' && input,
-  }
+export const string: ShapeString = {
+  __tag: 'string',
+  decode(input: unknown): string {
+    if (typeof input !== 'string') {
+      throw new Error('oopsy whoopsy!')
+    }
+    return input
+  },
 }
 
-function string(): ShapeString {
-  return {
-    __type: 'string',
-    decode(input: unknown): string {
-      if (typeof input !== 'string') {
-        throw new Error('oops!')
-      }
+export const bigint: ShapeBigInt = {
+  __tag: 'bigint',
+  decode(input: unknown): bigint {
+    if (typeof input === 'bigint') {
       return input
-    },
-  }
+    } else if (
+      typeof input === 'number' &&
+      !Number.isNaN(input) &&
+      Number.isFinite(input)
+    ) {
+      return BigInt(input)
+    }
+    throw new Error('oopsy whoopsy!')
+  },
 }
 
-function number(): ShapeNumber {
+function array<S extends Shape<unknown>>(elementShape: S): ShapeArray<S> {
   return {
-    __type: 'number',
-    decode(input: unknown): number {
-      if (
-        typeof input !== 'number' ||
-        Number.isNaN(input) ||
-        !Number.isFinite(input)
-      ) {
-        throw new Error('oops!')
-      }
-      return input
-    },
-  }
-}
-
-function array<S extends Shape>(elementShape: S): ShapeArray<S> {
-  return {
-    __type: 'array',
+    __tag: 'array',
     decode(input: unknown): Infer<S>[] {
       if (!Array.isArray(input)) {
-        throw new Error('oops!')
+        throw new Error('oopsy whoopsy!')
       }
 
-      return input.map((el) => elementShape.decode(el) as Infer<S>)
+      return input.map(elementShape.decode) as Infer<S>[]
     },
   }
 }
 
-type GetElementType<Arr extends unknown[]> =
-  Arr extends Array<infer T> ? T : never
-type Test1111 = GetElementType<string[]>
-
-function record<S extends Shape>(elementShape: S): ShapeRecord<S> {
+function record<S extends Shape<unknown>>(elementShape: S): ShapeRecord<S> {
   return {
-    __type: 'record',
+    __tag: 'record',
     decode(input: unknown): Record<string, Infer<S>> {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
-        throw new Error('oops!')
+        throw new Error('oopsy whoopsy!')
       }
 
       return Object.fromEntries(
@@ -156,13 +169,15 @@ function record<S extends Shape>(elementShape: S): ShapeRecord<S> {
   }
 }
 
-function struct<Fields extends Record<string, Shape>>(
+const UnknownRecord = record(unknown)
+
+function struct<Fields extends StructFields>(
   fieldShapes: Fields,
 ): ShapeStruct<Fields> {
   return {
-    __type: 'struct',
+    __tag: 'struct',
     decode(input: unknown): InferStruct<Fields> {
-      const inputRecord = record(unknown()).decode(input)
+      const inputRecord = UnknownRecord.decode(input)
 
       return Object.fromEntries(
         Object.entries(fieldShapes).map(([key, shape]) => [
@@ -174,37 +189,26 @@ function struct<Fields extends Record<string, Shape>>(
   }
 }
 
-function union<Variants extends Record<string, Shape>>(
+function union<Variants extends UnionVariants>(
   variants: Variants,
 ): ShapeUnion<Variants> {
   return {
-    __type: 'union',
+    __tag: 'union',
     decode(input: unknown): InferUnion<Variants> {
       if (!Array.isArray(input) || input.length !== 2) {
-        throw new Error('oops!')
+        throw new Error('oopsy whoopsy!')
       }
 
       const [tag, value] = input as [unknown, unknown]
 
       if (typeof tag !== 'string' || !Object.keys(variants).includes(tag)) {
-        throw new Error('oops!')
+        throw new Error('oopsy whoopsy!')
       }
 
       return [tag, variants[tag].decode(value) as Infer<Variants[typeof tag]>]
     },
   }
 }
-
-export const IO = {
-  unknown: unknown(),
-  boolean: boolean(),
-  string: string(),
-  number: number(),
-  array,
-  record,
-  struct,
-  union,
-} as const
 
 if (import.meta.vitest) {
   const { test, expect, describe } = import.meta.vitest
@@ -219,48 +223,48 @@ if (import.meta.vitest) {
 
   describe('Unknown', () => {
     test('Unknown decoding', () => {
-      expect(IO.unknown.decode('no idea')).toStrictEqual('no idea')
+      expect(unknown.decode('no idea')).toStrictEqual('no idea')
 
       type Expected = unknown
-      type _Test = Expect<Equal<Infer<typeof IO.unknown>, Expected>>
+      type _Test = Expect<Equal<Infer<typeof unknown>, Expected>>
     })
   })
 
   describe('Boolean', () => {
     test('Boolean decoding', () => {
-      expect(IO.boolean.decode(true)).toStrictEqual(true)
-      expect(IO.boolean.decode(false)).toStrictEqual(false)
+      expect(boolean.decode(true)).toStrictEqual(true)
+      expect(boolean.decode(false)).toStrictEqual(false)
 
       type Expected = boolean
-      type _Test = Expect<Equal<Infer<typeof IO.boolean>, Expected>>
+      type _Test = Expect<Equal<Infer<typeof boolean>, Expected>>
     })
   })
 
   describe('Number', () => {
     test('Number decoding', () => {
-      expect(IO.number.decode(16)).toStrictEqual(16)
-      expect(IO.number.decode(0)).toStrictEqual(0)
-      expect(IO.number.decode(-0)).toStrictEqual(-0)
+      expect(number.decode(16)).toStrictEqual(16)
+      expect(number.decode(0)).toStrictEqual(0)
+      expect(number.decode(-0)).toStrictEqual(-0)
+      expect(number.decode(-16)).toStrictEqual(-16)
 
-      expect(IO.number.decode(-16)).toStrictEqual(-16)
       type Expected = number
-      type _Test = Expect<Equal<Infer<typeof IO.number>, Expected>>
+      type _Test = Expect<Equal<Infer<typeof number>, Expected>>
     })
   })
 
   describe('String', () => {
     test('String decoding', () => {
-      expect(IO.string.decode('')).toStrictEqual('')
-      expect(IO.string.decode('hello')).toStrictEqual('hello')
+      expect(string.decode('')).toStrictEqual('')
+      expect(string.decode('hello')).toStrictEqual('hello')
 
       type Expected = string
-      type _Test = Expect<Equal<Infer<typeof IO.string>, Expected>>
+      type _Test = Expect<Equal<Infer<typeof string>, Expected>>
     })
   })
 
   describe('Array', () => {
     test('Array decoding', () => {
-      const StringArray = IO.array(IO.string)
+      const StringArray = array(string)
 
       expect(StringArray.decode(['a', 'b', 'c'])).toStrictEqual(['a', 'b', 'c'])
 
@@ -269,7 +273,7 @@ if (import.meta.vitest) {
     })
 
     test('nested Array decoding', () => {
-      const StringArrayArray = IO.array(IO.array(IO.string))
+      const StringArrayArray = array(array(string))
 
       expect(
         StringArrayArray.decode([
@@ -290,7 +294,7 @@ if (import.meta.vitest) {
 
   describe('Record', () => {
     test('Record decoding', () => {
-      const StringRecord = IO.record(IO.string)
+      const StringRecord = record(string)
 
       expect(StringRecord.decode({ a: 'aa', b: 'bb' })).toStrictEqual({
         a: 'aa',
@@ -304,7 +308,7 @@ if (import.meta.vitest) {
     })
 
     test('nested Record decoding', () => {
-      const StringRecordRecord = IO.record(IO.record(IO.string))
+      const StringRecordRecord = record(record(string))
 
       expect(
         StringRecordRecord.decode({ a: { aa: 'aaa' }, b: { bb: 'bbb' } }),
@@ -319,9 +323,9 @@ if (import.meta.vitest) {
 
   describe('Struct', () => {
     test('Struct decoding', () => {
-      const Point = IO.struct({
-        x: IO.number,
-        y: IO.number,
+      const Point = struct({
+        x: number,
+        y: number,
       })
 
       expect(Point.decode({ x: 1, y: 2 })).toStrictEqual({ x: 1, y: 2 })
@@ -336,11 +340,11 @@ if (import.meta.vitest) {
     })
 
     test('nested Struct decoding', () => {
-      const Point = IO.struct({
-        x: IO.number,
-        y: IO.number,
+      const Point = struct({
+        x: number,
+        y: number,
       })
-      const NestedPoint = IO.struct({
+      const NestedPoint = struct({
         start: Point,
         end: Point,
       })
@@ -368,13 +372,13 @@ if (import.meta.vitest) {
       expect(true).toBe(true)
 
       type Expected = {
-        x: number
+        n: number
         s: string
         a: boolean[]
         r: Record<string, number>
       }
       type Actual = InferStruct<{
-        x: ShapeNumber
+        n: ShapeNumber
         s: ShapeString
         a: ShapeArray<ShapeBoolean>
         r: ShapeRecord<ShapeNumber>
@@ -386,9 +390,9 @@ if (import.meta.vitest) {
 
   describe('Union', () => {
     test('Union decoding', () => {
-      const NumOrStr = IO.union({
-        num: IO.number,
-        str: IO.string,
+      const NumOrStr = union({
+        num: number,
+        str: string,
       })
 
       expect(NumOrStr.decode(['num', 16])).toStrictEqual(['num', 16])
@@ -401,20 +405,20 @@ if (import.meta.vitest) {
     })
 
     test('nested Union decoding', () => {
-      const Point = IO.struct({
-        x: IO.number,
-        y: IO.number,
+      const Point = struct({
+        x: number,
+        y: number,
       })
-      const ClickEvent = IO.struct({
+      const ClickEvent = struct({
         point: Point,
-        isDoubleClick: IO.boolean,
+        isDoubleClick: boolean,
       })
-      const DragEvent = IO.struct({
+      const DragEvent = struct({
         start: Point,
         end: Point,
-        duration: IO.number,
+        duration: number,
       })
-      const MouseEvent = IO.union({
+      const MouseEvent = union({
         click: ClickEvent,
         drag: DragEvent,
       })
