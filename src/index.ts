@@ -1,15 +1,23 @@
-interface Shape<T> {
-  readonly __tag:
-    | 'unknown'
-    | 'boolean'
-    | 'number'
-    | 'string'
-    | 'bigint'
-    | 'array'
-    | 'record'
-    | 'struct'
-    | 'union'
-  readonly decode: (input: unknown) => T
+import { Result } from './result.js'
+
+type ShapeTag =
+  | 'unknown'
+  | 'boolean'
+  | 'number'
+  | 'string'
+  | 'bigint'
+  | 'array'
+  | 'record'
+  | 'struct'
+  | 'union'
+  | 'custom'
+
+type DecodeError = string | { [key: string]: string | DecodeError }
+type DecodeResult<T> = Result<T, DecodeError>
+
+interface Shape<T, Input = unknown> {
+  readonly __tag: ShapeTag
+  readonly decode: (input: Input) => DecodeResult<T>
 }
 
 interface ShapeUnknown extends Shape<unknown> {
@@ -55,7 +63,11 @@ interface ShapeUnion<Variants extends UnionVariants> extends Shape<InferUnion<Va
   readonly __tag: 'union'
 }
 
-export type Infer<S extends Shape<unknown>> = S extends ShapeUnknown
+interface ShapeCustom<T, Input> extends Shape<T, Input> {
+  readonly __tag: 'custom'
+}
+
+export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
   ? unknown
   : S extends ShapeBoolean
     ? boolean
@@ -73,7 +85,9 @@ export type Infer<S extends Shape<unknown>> = S extends ShapeUnknown
                 ? InferStruct<Fields>
                 : S extends ShapeUnion<infer Variants>
                   ? InferUnion<Variants>
-                  : never
+                  : S extends ShapeCustom<infer T, infer Input>
+                    ? T
+                    : never
 
 type InferStruct<Fields extends StructFields> = {
   [Key in keyof Fields]: Infer<Fields[Key]>
@@ -83,130 +97,218 @@ type InferUnion<Variants extends UnionVariants> = {
   [Key in keyof Variants]: [Key, Infer<Variants[Key]>]
 }[keyof Variants]
 
+function typeOf(input: unknown): string {
+  if (input === null) {
+    return 'null'
+  }
+  return typeof input
+}
+
 export const unknown: ShapeUnknown = {
   __tag: 'unknown',
-  decode: (input: unknown): unknown => input,
+  decode: (input: unknown) => Result.success(input),
 } as const
 
 export const boolean: ShapeBoolean = {
   __tag: 'boolean',
-  decode: (input: unknown): boolean => {
+  decode: (input: unknown): DecodeResult<boolean> => {
     if (typeof input !== 'boolean') {
-      throw new Error('oopsy whoopsy!')
+      return Result.error(`expected 'boolean', got '${typeOf(input)}'`)
     }
-    return input
+    return Result.success(input)
   },
 } as const
 
 export const number: ShapeNumber = {
   __tag: 'number',
-  decode(input: unknown): number {
-    if (
-      typeof input !== 'number' ||
-      Number.isNaN(input) ||
-      !Number.isFinite(input)
-    ) {
-      throw new Error('oopsy whoopsy!')
+  decode(input: unknown): DecodeResult<number> {
+    if (typeof input !== 'number') {
+      return Result.error(`expected 'number', got '${typeOf(input)}'`)
     }
-    return input
+    if (Number.isNaN(input)) {
+      return Result.error(`expected 'number', got 'NaN'`)
+    }
+    if (!Number.isFinite(input)) {
+      return Result.error(`expected finite 'number', got '${input}'`)
+    }
+
+    return Result.success(input)
   },
-}
+} as const
 
 export const string: ShapeString = {
   __tag: 'string',
-  decode(input: unknown): string {
+  decode(input: unknown): DecodeResult<string> {
     if (typeof input !== 'string') {
-      throw new Error('oopsy whoopsy!')
+      return Result.error(`expected 'string', got '${typeOf(input)}'`)
     }
-    return input
+    return Result.success(input)
   },
-}
+} as const
 
 export const bigint: ShapeBigInt = {
   __tag: 'bigint',
-  decode(input: unknown): bigint {
+  decode(input: unknown): DecodeResult<bigint> {
     if (typeof input === 'bigint') {
-      return input
-    } else if (
-      typeof input === 'number' &&
-      !Number.isNaN(input) &&
-      Number.isFinite(input)
-    ) {
-      return BigInt(input)
+      return Result.success(input)
+    } else if (typeof input === 'number') {
+      if (Number.isNaN(input)) {
+        return Result.error(`expected bigint or number, got 'NaN'`)
+      }
+      if (!Number.isFinite(input)) {
+        return Result.error(`expected finite number, got ${input}`)
+      }
+      return Result.success(BigInt(input))
     }
-    throw new Error('oopsy whoopsy!')
+    return Result.error(`expected 'bigint' or 'number', got '${typeOf(input)}'`)
   },
-}
+} as const
 
-function array<S extends Shape<unknown>>(elementShape: S): ShapeArray<S> {
+export function array<S extends Shape<unknown>>(
+  elementShape: S,
+): ShapeArray<S> {
   return {
     __tag: 'array',
-    decode(input: unknown): Infer<S>[] {
+    decode(input: unknown): DecodeResult<Infer<S>[]> {
       if (!Array.isArray(input)) {
-        throw new Error('oopsy whoopsy!')
+        return Result.error(`expected 'Array', got '${typeOf(input)}'`)
       }
 
-      return input.map(elementShape.decode) as Infer<S>[]
+      const errors: DecodeError = {}
+      const output = Array<Infer<S>>(input.length)
+
+      for (let i = 0; i < input.length; i++) {
+        const result = elementShape.decode(input[i])
+        if (Result.isSuccess(result)) {
+          output[i] = result.value as Infer<S>
+        } else {
+          errors[i] = result.error
+        }
+      }
+
+      if (Object.keys(errors).length > 1) {
+        return Result.error(errors)
+      }
+
+      return Result.success(output)
     },
-  }
+  } as const
 }
 
-function record<S extends Shape<unknown>>(elementShape: S): ShapeRecord<S> {
+export function record<S extends Shape<unknown>>(
+  valueShape: S,
+): ShapeRecord<S> {
   return {
     __tag: 'record',
-    decode(input: unknown): Record<string, Infer<S>> {
+    decode(input: unknown): DecodeResult<Record<string, Infer<S>>> {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
-        throw new Error('oopsy whoopsy!')
+        return Result.error(`expected 'Object', got '${typeOf(input)}'`)
       }
 
-      return Object.fromEntries(
-        Object.entries(input).map(([key, value]) => [
-          key,
-          elementShape.decode(value) as Infer<S>,
-        ]),
-      )
+      const errors: DecodeError = {}
+      const output: Record<string, Infer<S>> = {}
+
+      for (const [key, value] of Object.entries(input)) {
+        const result = valueShape.decode(value)
+        if (Result.isSuccess(result)) {
+          output[key] = result.value as Infer<S>
+        } else {
+          errors[key] = result.error
+        }
+      }
+
+      if (Object.keys(errors).length > 1) {
+        return Result.error(errors)
+      }
+
+      return Result.success(output)
     },
-  }
+  } as const
 }
 
 const UnknownRecord = record(unknown)
 
-function struct<Fields extends StructFields>(
+export function struct<Fields extends StructFields>(
   fieldShapes: Fields,
 ): ShapeStruct<Fields> {
   return {
     __tag: 'struct',
-    decode(input: unknown): InferStruct<Fields> {
-      const inputRecord = UnknownRecord.decode(input)
-
-      return Object.fromEntries(
-        Object.entries(fieldShapes).map(([key, shape]) => [
-          key,
-          shape.decode(inputRecord[key]),
-        ]),
-      ) as InferStruct<Fields>
+    decode(input: unknown): DecodeResult<InferStruct<Fields>> {
+      return Result.flatMap(UnknownRecord.decode(input), (record) =>
+        decodeRecordToStruct(record, fieldShapes),
+      )
     },
-  }
+  } as const
 }
 
-function union<Variants extends UnionVariants>(
+function decodeRecordToStruct<Fields extends StructFields>(
+  data: Record<string, unknown>,
+  fieldShapes: Fields,
+): DecodeResult<InferStruct<Fields>> {
+  const output = {} as InferStruct<Fields>
+  const errors: DecodeError = {}
+
+  for (const [key, shape] of Object.entries(fieldShapes)) {
+    const result = shape.decode(data[key])
+    if (Result.isSuccess(result)) {
+      output[key as keyof Fields] = result.value as Infer<Fields[keyof Fields]>
+    } else {
+      errors[key] = result.error
+    }
+  }
+
+  if (Object.keys(errors).length > 1) {
+    return Result.error(errors)
+  }
+
+  return Result.success(output)
+}
+
+export function union<Variants extends UnionVariants>(
   variants: Variants,
 ): ShapeUnion<Variants> {
   return {
     __tag: 'union',
-    decode(input: unknown): InferUnion<Variants> {
+    decode(input: unknown): DecodeResult<InferUnion<Variants>> {
       if (!Array.isArray(input) || input.length !== 2) {
-        throw new Error('oopsy whoopsy!')
+        return Result.error(
+          'expected a 2-tuple with the tag as the first element',
+        )
       }
 
       const [tag, value] = input as [unknown, unknown]
 
-      if (typeof tag !== 'string' || !Object.keys(variants).includes(tag)) {
-        throw new Error('oopsy whoopsy!')
+      if (typeof tag !== 'string') {
+        return Result.error(
+          `expected the tag to be a 'string', got ${typeOf(tag)}`,
+        )
       }
 
-      return [tag, variants[tag].decode(value) as Infer<Variants[typeof tag]>]
+      if (!Object.keys(variants).includes(tag)) {
+        return Result.error(
+          'expected the tag to match one of the provided variants',
+        )
+      }
+
+      const result = variants[tag].decode(value)
+      if (Result.isError(result)) {
+        return Result.error({ [tag]: result.error })
+      }
+
+      return Result.success([
+        tag,
+        variants[tag].decode(value) as Infer<Variants[typeof tag]>,
+      ])
     },
+  }
+}
+
+export function custom<T, Input>(
+  decode: (input: Input) => DecodeResult<T>,
+): ShapeCustom<T, Input> {
+  return {
+    __tag: 'custom',
+    decode,
   }
 }
 
@@ -221,9 +323,37 @@ if (import.meta.vitest) {
       ? true
       : false
 
+  /**
+   * Vitest's assertion functions don't make use of the TypeScript
+   * [asserts keyword](https://devblogs.microsoft.com/typescript/announcing-typescript-3-7/#assertion-functions)
+   * so this helper is useful to unwrap after doing our own assertion.
+   */
+  function unsafeUnwrap<T, Err>(result: Result<T, Err>): T {
+    if (Result.isSuccess(result)) {
+      return result.value
+    }
+    throw new Error('Unwrapped an Error result')
+  }
+
+  /**
+   * Vitest's assertion functions don't make use of the TypeScript
+   * [asserts keyword](https://devblogs.microsoft.com/typescript/announcing-typescript-3-7/#assertion-functions)
+   * so this helper is useful to unwrap after doing our own assertion.
+   */
+  function unsafeUnwrapError<T, Err>(result: Result<T, Err>): Err {
+    if (Result.isError(result)) {
+      return result.error
+    }
+    throw new Error('Unwrapped a Success result')
+  }
+
   describe('Unknown', () => {
     test('Unknown decoding', () => {
-      expect(unknown.decode('no idea')).toStrictEqual('no idea')
+      const result = unknown.decode('no idea')
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual('no idea')
 
       type Expected = unknown
       type Actual = Infer<typeof unknown>
@@ -233,9 +363,15 @@ if (import.meta.vitest) {
   })
 
   describe('Boolean', () => {
-    test('Boolean decoding', () => {
-      expect(boolean.decode(true)).toStrictEqual(true)
-      expect(boolean.decode(false)).toStrictEqual(false)
+    test.each([
+      [true, true],
+      [false, false],
+    ])('Boolean decoding sucess: %s -> %s', (input, expected) => {
+      const result = boolean.decode(input)
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
 
       type Expected = boolean
       type Actual = Infer<typeof boolean>
@@ -245,36 +381,68 @@ if (import.meta.vitest) {
   })
 
   describe('Number', () => {
-    test('Number decoding', () => {
-      expect(number.decode(16)).toStrictEqual(16)
-      expect(number.decode(0)).toStrictEqual(0)
-      expect(number.decode(-0)).toStrictEqual(-0)
-      expect(number.decode(-16)).toStrictEqual(-16)
+    test('Number type inference', () => {
+      expect(true).toBe(true)
 
       type Expected = number
       type Actual = Infer<typeof number>
 
       type _Test = Expect<Equal<Expected, Actual>>
     })
+    test.each([
+      [16, 16],
+      [0, 0],
+      [-0, -0],
+      [-16, -16],
+    ])('Number decoding success: %f -> %f', (input, expected) => {
+      const result = number.decode(input)
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
+    })
+
+    test.each([
+      ['yolo', "expected 'number', got 'string'"],
+      [NaN, "expected 'number', got 'NaN'"],
+      [+Infinity, "expected finite 'number', got 'Infinity'"],
+      [-Infinity, "expected finite 'number', got '-Infinity'"],
+      [null, "expected 'number', got 'null'"],
+    ])('Number decoding failure: %s', (input, expected) => {
+      const result = number.decode(input)
+      expect(Result.isError(result))
+
+      const actual = unsafeUnwrapError(result)
+      expect(actual).toStrictEqual(expected)
+    })
   })
 
   describe('String', () => {
-    test('String decoding', () => {
-      expect(string.decode('')).toStrictEqual('')
-      expect(string.decode('hello')).toStrictEqual('hello')
+    test('String type inference', () => {
+      expect(true).toBe(true)
 
       type Expected = string
       type Actual = Infer<typeof string>
 
       type _Test = Expect<Equal<Expected, Actual>>
     })
+
+    test.each([
+      ['', ''],
+      ['hello', 'hello'],
+    ])('String decoding: %s -> %s', (input, expected) => {
+      const result = string.decode(input)
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
+    })
   })
 
   describe('Array', () => {
-    test('Array decoding', () => {
+    test('Array inference', () => {
       const StringArray = array(string)
-
-      expect(StringArray.decode(['a', 'b', 'c'])).toStrictEqual(['a', 'b', 'c'])
+      expect(true).toBe(true)
 
       type Expected = string[]
       type Actual = Infer<typeof StringArray>
@@ -282,16 +450,33 @@ if (import.meta.vitest) {
       type _Test = Expect<Equal<Expected, Actual>>
     })
 
+    test.each([
+      [[], []],
+      [
+        ['a', 'b', 'c'],
+        ['a', 'b', 'c'],
+      ],
+    ])('Array decoding', (input, expected) => {
+      const StringArray = array(string)
+      const result = StringArray.decode(input)
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
+    })
+
     test('nested Array decoding', () => {
       const StringArrayArray = array(array(string))
 
-      expect(
-        StringArrayArray.decode([
-          ['a', 'b'],
-          ['c', 'd'],
-          ['e', 'f'],
-        ]),
-      ).toStrictEqual([
+      const result = StringArrayArray.decode([
+        ['a', 'b'],
+        ['c', 'd'],
+        ['e', 'f'],
+      ])
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual([
         ['a', 'b'],
         ['c', 'd'],
         ['e', 'f'],
@@ -470,6 +655,54 @@ if (import.meta.vitest) {
       }>
 
       type _Test = Expect<Equal<Expected, Actual>>
+    })
+  })
+
+  describe('Custom', () => {
+    const regexes = [
+      /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})$/, // YYYY-MM-DD
+      /^(?<month>\d{2})\/(?<day>\d{2})\/(?<year>\d{4})$/, // MM/DD/YYYY
+      /^(?<month>\d{2})_(?<day>\d{2})_(?<year>\d{4})$/, // MM_DD_YYYY
+    ]
+    function customDateDecoder(input: string): DecodeResult<Date> {
+      for (const regex of regexes) {
+        const match = input.match(regex)
+        if (match) {
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          const year = Number.parseInt(match.groups!['year'])
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          const month = Number.parseInt(match.groups!['month'])
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          const day = Number.parseInt(match.groups!['day'])
+          return Result.success(new Date(year, month - 1, day)) // month starts at zero...
+        }
+      }
+      return Result.error(`unable to parse ${input} into a Date`)
+    }
+
+    test('custom decoder inference', () => {
+      const CustomDate = custom(customDateDecoder)
+
+      type Expected = Date
+      type Actual = Infer<typeof CustomDate>
+
+      type _Test = Expect<Equal<Expected, Actual>>
+    })
+
+    test('custom decoder functionality', () => {
+      const CustomDate = custom(customDateDecoder)
+
+      const testData = [
+        // input, expected
+        ['2024-11-18', new Date(2024, 10, 18)],
+        ['11/18/2024', new Date(2024, 10, 18)],
+        ['11_18_2024', new Date(2024, 10, 18)],
+      ] as const
+
+      for (const [input, expected] of testData) {
+        const actual = CustomDate.decode(input)
+        expect(actual).toStrictEqual(expected)
+      }
     })
   })
 }
