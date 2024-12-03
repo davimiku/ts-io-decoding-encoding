@@ -10,6 +10,7 @@ type ShapeTag =
   | 'record'
   | 'struct'
   | 'union'
+  | 'optional'
   | 'custom'
 
 type DecodeError = string | { [key: string]: string | DecodeError }
@@ -67,6 +68,10 @@ interface ShapeCustom<T, Input> extends Shape<T, Input> {
   readonly __tag: 'custom'
 }
 
+interface ShapeOptional<T> extends Shape<T | undefined> {
+  readonly __tag: 'optional'
+}
+
 export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
   ? unknown
   : S extends ShapeBoolean
@@ -77,17 +82,19 @@ export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
         ? string
         : S extends ShapeBigInt
           ? bigint
-          : S extends ShapeArray<infer ElementShape>
-            ? Infer<ElementShape>[]
-            : S extends ShapeRecord<infer ValueShape>
-              ? Record<string, Infer<ValueShape>>
-              : S extends ShapeStruct<infer Fields>
-                ? InferStruct<Fields>
-                : S extends ShapeUnion<infer Variants>
-                  ? InferUnion<Variants>
-                  : S extends ShapeCustom<infer T, infer Input>
-                    ? T
-                    : never
+          : S extends ShapeOptional<infer T>
+            ? T | undefined
+            : S extends ShapeArray<infer ElementShape>
+              ? Infer<ElementShape>[]
+              : S extends ShapeRecord<infer ValueShape>
+                ? Record<string, Infer<ValueShape>>
+                : S extends ShapeStruct<infer Fields>
+                  ? InferStruct<Fields>
+                  : S extends ShapeUnion<infer Variants>
+                    ? InferUnion<Variants>
+                    : S extends ShapeCustom<infer T, infer Input>
+                      ? T
+                      : never
 
 type InferStruct<Fields extends StructFields> = {
   [Key in keyof Fields]: Infer<Fields[Key]>
@@ -312,6 +319,18 @@ export function custom<T, Input>(
   }
 }
 
+export function optional<T>(shape: Shape<T>): ShapeOptional<T> {
+  return {
+    __tag: 'optional',
+    decode: (input: unknown) => {
+      if (typeof input === 'undefined') {
+        return Result.success(input)
+      }
+      return shape.decode(input)
+    },
+  }
+}
+
 if (import.meta.vitest) {
   const { test, expect, describe } = import.meta.vitest
 
@@ -389,6 +408,7 @@ if (import.meta.vitest) {
 
       type _Test = Expect<Equal<Expected, Actual>>
     })
+
     test.each([
       [16, 16],
       [0, 0],
@@ -656,7 +676,7 @@ if (import.meta.vitest) {
         ['str', 'hello'],
         ['str', 'hello'],
       ],
-    ])('Union decoding success', (input, expected) => {
+    ])('Union decoding success: %s', (input, expected) => {
       const result = NumOrStr.decode(input)
       expect(Result.isSuccess(result))
 
@@ -743,6 +763,46 @@ if (import.meta.vitest) {
         a: ShapeArray<ShapeBoolean>
         r: ShapeRecord<ShapeNumber>
       }>
+
+      type _Test = Expect<Equal<Expected, Actual>>
+    })
+  })
+
+  describe('Optional', () => {
+    test.each([
+      [3, 3],
+      [undefined, undefined],
+      // eslint-disable-next-line no-sparse-arrays
+      [, ,],
+    ])('Optional number success: %s', (input, expected) => {
+      const OptionalNumber = optional(number)
+
+      const result = OptionalNumber.decode(input)
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
+    })
+
+    test('Optional type inference', () => {
+      expect(true).toBe(true)
+
+      const OptionalNumber = optional(number)
+
+      type Expected = number | undefined
+      type Actual = Infer<typeof OptionalNumber>
+
+      type _Test = Expect<Equal<Expected, Actual>>
+    })
+
+    test('Optional type inference nested', () => {
+      expect(true).toBe(true)
+
+      // untagged unions collapse / don't nest
+      const OptionalOptionalNumber = optional(optional(number))
+
+      type Expected = number | undefined
+      type Actual = Infer<typeof OptionalOptionalNumber>
 
       type _Test = Expect<Equal<Expected, Actual>>
     })
