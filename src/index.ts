@@ -186,7 +186,7 @@ export function array<S extends Shape<unknown>>(
         }
       }
 
-      if (Object.keys(errors).length > 1) {
+      if (Object.keys(errors).length > 0) {
         return Result.error(errors)
       }
 
@@ -217,7 +217,7 @@ export function record<S extends Shape<unknown>>(
         }
       }
 
-      if (Object.keys(errors).length > 1) {
+      if (Object.keys(errors).length > 0) {
         return Result.error(errors)
       }
 
@@ -257,7 +257,7 @@ function decodeRecordToStruct<Fields extends StructFields>(
     }
   }
 
-  if (Object.keys(errors).length > 1) {
+  if (Object.keys(errors).length > 0) {
     return Result.error(errors)
   }
 
@@ -291,14 +291,14 @@ export function union<Variants extends UnionVariants>(
       }
 
       const result = variants[tag].decode(value)
-      if (Result.isError(result)) {
-        return Result.error({ [tag]: result.error })
-      }
 
-      return Result.success([
-        tag,
-        variants[tag].decode(value) as Infer<Variants[typeof tag]>,
-      ])
+      return Result.mapError(
+        Result.map(result, (value) => [
+          tag,
+          value as Infer<Variants[typeof tag]>,
+        ]),
+        (error) => ({ [tag]: error }),
+      )
     },
   }
 }
@@ -440,8 +440,8 @@ if (import.meta.vitest) {
   })
 
   describe('Array', () => {
+    const StringArray = array(string)
     test('Array inference', () => {
-      const StringArray = array(string)
       expect(true).toBe(true)
 
       type Expected = string[]
@@ -456,8 +456,7 @@ if (import.meta.vitest) {
         ['a', 'b', 'c'],
         ['a', 'b', 'c'],
       ],
-    ])('Array decoding', (input, expected) => {
-      const StringArray = array(string)
+    ])('Array decoding success', (input, expected) => {
       const result = StringArray.decode(input)
       expect(Result.isSuccess(result))
 
@@ -487,13 +486,35 @@ if (import.meta.vitest) {
 
       type _Test = Expect<Equal<Expected, Actual>>
     })
+
+    test.each([
+      [[0], { '0': "expected 'string', got 'number'" }],
+      [
+        ['0', 1, '2', 3],
+        {
+          '1': "expected 'string', got 'number'",
+          '3': "expected 'string', got 'number'",
+        },
+      ],
+    ])('Array decoding failure', (input, expected) => {
+      const result = StringArray.decode(input)
+      expect(Result.isError(result))
+
+      const actual = unsafeUnwrapError(result)
+      expect(actual).toStrictEqual(expected)
+    })
   })
 
   describe('Record', () => {
     test('Record decoding', () => {
       const StringRecord = record(string)
 
-      expect(StringRecord.decode({ a: 'aa', b: 'bb' })).toStrictEqual({
+      const result = StringRecord.decode({ a: 'aa', b: 'bb' })
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+
+      expect(actual).toStrictEqual({
         a: 'aa',
         b: 'bb',
       })
@@ -507,9 +528,14 @@ if (import.meta.vitest) {
     test('nested Record decoding', () => {
       const StringRecordRecord = record(record(string))
 
-      expect(
-        StringRecordRecord.decode({ a: { aa: 'aaa' }, b: { bb: 'bbb' } }),
-      ).toStrictEqual({ a: { aa: 'aaa' }, b: { bb: 'bbb' } })
+      const result = StringRecordRecord.decode({
+        a: { aa: 'aaa' },
+        b: { bb: 'bbb' },
+      })
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual({ a: { aa: 'aaa' }, b: { bb: 'bbb' } })
 
       type Expected = Record<string, Record<string, string>>
       type Actual = Infer<typeof StringRecordRecord>
@@ -519,13 +545,17 @@ if (import.meta.vitest) {
   })
 
   describe('Struct', () => {
-    test('Struct decoding', () => {
-      const Point = struct({
-        x: number,
-        y: number,
-      })
+    const Point = struct({
+      x: number,
+      y: number,
+    })
 
-      expect(Point.decode({ x: 1, y: 2 })).toStrictEqual({ x: 1, y: 2 })
+    test('Struct decoding success', () => {
+      const result = Point.decode({ x: 1, y: 2 })
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual({ x: 1, y: 2 })
 
       type Expected = {
         x: number
@@ -536,7 +566,7 @@ if (import.meta.vitest) {
       type _Test = Expect<Equal<Expected, Actual>>
     })
 
-    test('nested Struct decoding', () => {
+    test('nested Struct decoding success', () => {
       const Point = struct({
         x: number,
         y: number,
@@ -546,9 +576,17 @@ if (import.meta.vitest) {
         end: Point,
       })
 
-      expect(
-        NestedPoint.decode({ start: { x: 1, y: 2 }, end: { x: 10, y: 20 } }),
-      ).toStrictEqual({ start: { x: 1, y: 2 }, end: { x: 10, y: 20 } })
+      const result = NestedPoint.decode({
+        start: { x: 1, y: 2 },
+        end: { x: 10, y: 20 },
+      })
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual({
+        start: { x: 1, y: 2 },
+        end: { x: 10, y: 20 },
+      })
 
       type Expected = {
         start: {
@@ -563,6 +601,24 @@ if (import.meta.vitest) {
       type Actual = Infer<typeof NestedPoint>
 
       type _Test = Expect<Equal<Expected, Actual>>
+    })
+
+    test.each([
+      [{ x: 'hello world', y: 2 }, { x: "expected 'number', got 'string'" }],
+      [{ y: 2 }, { x: "expected 'number', got 'undefined'" }],
+      [
+        { y: 'hello world' },
+        {
+          x: "expected 'number', got 'undefined'",
+          y: "expected 'number', got 'string'",
+        },
+      ],
+    ])('Struct decoding failure', (input, expected) => {
+      const result = Point.decode(input)
+      expect(Result.isError(result))
+
+      const actual = unsafeUnwrapError(result)
+      expect(actual).toStrictEqual(expected)
     })
 
     test('Struct type inference', () => {
@@ -586,14 +642,26 @@ if (import.meta.vitest) {
   })
 
   describe('Union', () => {
-    test('Union decoding', () => {
-      const NumOrStr = union({
-        num: number,
-        str: string,
-      })
+    const NumOrStr = union({
+      num: number,
+      str: string,
+    })
 
-      expect(NumOrStr.decode(['num', 16])).toStrictEqual(['num', 16])
-      expect(NumOrStr.decode(['str', 'hello'])).toStrictEqual(['str', 'hello'])
+    test.each([
+      [
+        ['num', 16],
+        ['num', 16],
+      ],
+      [
+        ['str', 'hello'],
+        ['str', 'hello'],
+      ],
+    ])('Union decoding success', (input, expected) => {
+      const result = NumOrStr.decode(input)
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
 
       type Expected = ['num', number] | ['str', string]
       type Actual = Infer<typeof NumOrStr>
@@ -601,13 +669,28 @@ if (import.meta.vitest) {
       type _Test = Expect<Equal<Expected, Actual>>
     })
 
-    test('nested Union decoding', () => {
+    test.each([
+      [
+        ['click', { location: { x: 1, y: 2 }, isDoubleClick: false }],
+        ['click', { location: { x: 1, y: 2 }, isDoubleClick: false }],
+      ],
+      [
+        [
+          'drag',
+          { start: { x: 0, y: 100 }, end: { x: 100, y: 100 }, duration: 300 },
+        ],
+        [
+          'drag',
+          { start: { x: 0, y: 100 }, end: { x: 100, y: 100 }, duration: 300 },
+        ],
+      ],
+    ])('nested Union decoding', (input, expected) => {
       const Point = struct({
         x: number,
         y: number,
       })
       const ClickEvent = struct({
-        point: Point,
+        location: Point,
         isDoubleClick: boolean,
       })
       const DragEvent = struct({
@@ -620,15 +703,11 @@ if (import.meta.vitest) {
         drag: DragEvent,
       })
 
-      expect(
-        MouseEvent.decode([
-          'click',
-          { isDoubleClick: false, point: { x: 100, y: 200 } },
-        ]),
-      ).toStrictEqual([
-        'click',
-        { isDoubleClick: false, point: { x: 100, y: 200 } },
-      ])
+      const result = MouseEvent.decode(input)
+      expect(Result.isSuccess(result))
+
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
 
       type Expected =
         | ['click', Infer<typeof ClickEvent>]
@@ -636,6 +715,17 @@ if (import.meta.vitest) {
       type Actual = Infer<typeof MouseEvent>
 
       type _Test = Expect<Equal<Expected, Actual>>
+    })
+
+    test.each([
+      [['num', '5'], { num: "expected 'number', got 'string'" }],
+      [['str', null], { str: "expected 'string', got 'null'" }],
+    ])('Union decoding failure', (input, expected) => {
+      const result = NumOrStr.decode(input)
+      expect(Result.isError(result))
+
+      const actual = unsafeUnwrapError(result)
+      expect(actual).toStrictEqual(expected)
     })
 
     test('Union type inference', () => {
@@ -679,30 +769,25 @@ if (import.meta.vitest) {
       }
       return Result.error(`unable to parse ${input} into a Date`)
     }
+    const CustomDate = custom(customDateDecoder)
 
     test('custom decoder inference', () => {
-      const CustomDate = custom(customDateDecoder)
-
       type Expected = Date
       type Actual = Infer<typeof CustomDate>
 
       type _Test = Expect<Equal<Expected, Actual>>
     })
 
-    test('custom decoder functionality', () => {
-      const CustomDate = custom(customDateDecoder)
+    test.each([
+      ['2024-11-18', new Date(2024, 10, 18)],
+      ['11/18/2024', new Date(2024, 10, 18)],
+      ['11_18_2024', new Date(2024, 10, 18)],
+    ])('custom decoder functionality', (input, expected) => {
+      const result = CustomDate.decode(input)
+      expect(Result.isSuccess(result))
 
-      const testData = [
-        // input, expected
-        ['2024-11-18', new Date(2024, 10, 18)],
-        ['11/18/2024', new Date(2024, 10, 18)],
-        ['11_18_2024', new Date(2024, 10, 18)],
-      ] as const
-
-      for (const [input, expected] of testData) {
-        const actual = CustomDate.decode(input)
-        expect(actual).toStrictEqual(expected)
-      }
+      const actual = unsafeUnwrap(result)
+      expect(actual).toStrictEqual(expected)
     })
   })
 }

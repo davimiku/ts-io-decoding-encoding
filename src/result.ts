@@ -45,6 +45,20 @@ function map<T, U, Err>(
 }
 
 /**
+ * Maps the error of the `Result` with the given mapper if it is
+ * the "error" variant, otherwise returns the same `Result`
+ */
+function mapError<T, Err1, Err2>(
+  result: Result<T, Err1>,
+  mapper: (err: Err1) => Err2,
+): Result<T, Err2> {
+  if (isError(result)) {
+    return error(mapper(result.error))
+  }
+  return result
+}
+
+/**
  * Flatmaps the value of the `Result` with the given mapper if it is
  * the "success" variant, otherwise returns the same `Result`
  */
@@ -64,5 +78,6 @@ export const Result = {
   error,
   isError,
   map,
+  mapError,
   flatMap,
 } as const
