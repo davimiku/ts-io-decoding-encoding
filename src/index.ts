@@ -16,9 +16,17 @@ type ShapeTag =
 type DecodeError = string | { [key: string]: string | DecodeError }
 type DecodeResult<T> = Result<T, DecodeError>
 
-interface Shape<T, Input = unknown> {
+type Shape<T, Input = unknown, Output = T> = Decoder<T, Input> &
+  Encoder<T, Output>
+
+type Decoder<T, Input = unknown> = {
   readonly __tag: ShapeTag
   readonly decode: (input: Input) => DecodeResult<T>
+}
+
+type Encoder<T, Output = unknown> = {
+  readonly __tag: ShapeTag
+  readonly encode: (value: T) => Output
 }
 
 interface ShapeUnknown extends Shape<unknown> {
@@ -41,30 +49,30 @@ interface ShapeBigInt extends Shape<bigint> {
   readonly __tag: 'bigint'
 }
 
-interface ShapeArray<S extends Shape<unknown>> extends Shape<Infer<S>[]> {
+interface ShapeArray<S extends Decoder<unknown>> extends Shape<Infer<S>[]> {
   readonly __tag: 'array'
 }
 
 // prettier-ignore
-interface ShapeRecord<S extends Shape<unknown>> extends Shape<Record<string, Infer<S>>> {
+interface ShapeRecord<S extends Decoder<unknown>> extends Shape<Record<string, Infer<S>>> {
   readonly __tag: 'record'
 }
 
-type StructFields = Record<string, Shape<unknown>>
+type StructFields = Record<string, Decoder<unknown>>
 
 // prettier-ignore
 interface ShapeStruct<Fields extends StructFields> extends Shape<InferStruct<Fields>> {
   readonly __tag: 'struct'
 }
 
-type UnionVariants = Record<string, Shape<unknown>>
+type UnionVariants = Record<string, Decoder<unknown>>
 
 // prettier-ignore
 interface ShapeUnion<Variants extends UnionVariants> extends Shape<InferUnion<Variants>> {
   readonly __tag: 'union'
 }
 
-interface ShapeCustom<T, Input> extends Shape<T, Input> {
+interface ShapeCustom<T, Input, Output> extends Shape<T, Input, Output> {
   readonly __tag: 'custom'
 }
 
@@ -72,7 +80,7 @@ interface ShapeOptional<T> extends Shape<T | undefined> {
   readonly __tag: 'optional'
 }
 
-export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
+export type Infer<S extends Decoder<unknown, never>> = S extends ShapeUnknown
   ? unknown
   : S extends ShapeBoolean
     ? boolean
@@ -92,7 +100,7 @@ export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
                   ? InferStruct<Fields>
                   : S extends ShapeUnion<infer Variants>
                     ? InferUnion<Variants>
-                    : S extends ShapeCustom<infer T, infer Input>
+                    : S extends ShapeCustom<infer T, infer Input, infer Output>
                       ? T
                       : never
 
@@ -111,9 +119,14 @@ function typeOf(input: unknown): string {
   return typeof input
 }
 
+function identity<T>(t: T): T {
+  return t
+}
+
 export const unknown: ShapeUnknown = {
   __tag: 'unknown',
   decode: (input: unknown) => Result.success(input),
+  encode: identity,
 } as const
 
 export const boolean: ShapeBoolean = {
@@ -124,6 +137,7 @@ export const boolean: ShapeBoolean = {
     }
     return Result.success(input)
   },
+  encode: identity,
 } as const
 
 export const number: ShapeNumber = {
@@ -141,6 +155,7 @@ export const number: ShapeNumber = {
 
     return Result.success(input)
   },
+  encode: identity,
 } as const
 
 export const string: ShapeString = {
@@ -151,6 +166,7 @@ export const string: ShapeString = {
     }
     return Result.success(input)
   },
+  encode: identity,
 } as const
 
 export const bigint: ShapeBigInt = {
@@ -169,9 +185,10 @@ export const bigint: ShapeBigInt = {
     }
     return Result.error(`expected 'bigint' or 'number', got '${typeOf(input)}'`)
   },
+  encode: identity,
 } as const
 
-export function array<S extends Shape<unknown>>(
+export function array<S extends Decoder<unknown>>(
   elementShape: S,
 ): ShapeArray<S> {
   return {
@@ -199,10 +216,11 @@ export function array<S extends Shape<unknown>>(
 
       return Result.success(output)
     },
+    encode: identity,
   } as const
 }
 
-export function record<S extends Shape<unknown>>(
+export function record<S extends Decoder<unknown>>(
   valueShape: S,
 ): ShapeRecord<S> {
   return {
@@ -230,6 +248,7 @@ export function record<S extends Shape<unknown>>(
 
       return Result.success(output)
     },
+    encode: identity,
   } as const
 }
 
@@ -245,6 +264,7 @@ export function struct<Fields extends StructFields>(
         decodeRecordToStruct(record, fieldShapes),
       )
     },
+    encode: identity,
   } as const
 }
 
@@ -307,15 +327,18 @@ export function union<Variants extends UnionVariants>(
         (error) => ({ [tag]: error }),
       )
     },
+    encode: identity,
   }
 }
 
-export function custom<T, Input>(
+export function custom<T, Input, Output = T>(
   decode: (input: Input) => DecodeResult<T>,
-): ShapeCustom<T, Input> {
+  encode: (value: T) => Output,
+): ShapeCustom<T, Input, Output> {
   return {
     __tag: 'custom',
     decode,
+    encode,
   }
 }
 
@@ -328,6 +351,7 @@ export function optional<T>(shape: Shape<T>): ShapeOptional<T> {
       }
       return shape.decode(input)
     },
+    encode: identity,
   }
 }
 
