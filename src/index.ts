@@ -838,6 +838,7 @@ if (import.meta.vitest) {
       /^(?<month>\d{2})\/(?<day>\d{2})\/(?<year>\d{4})$/, // MM/DD/YYYY
       /^(?<month>\d{2})_(?<day>\d{2})_(?<year>\d{4})$/, // MM_DD_YYYY
     ]
+
     function customDateDecoder(input: string): DecodeResult<Date> {
       for (const regex of regexes) {
         const match = input.match(regex)
@@ -848,12 +849,13 @@ if (import.meta.vitest) {
           const month = Number.parseInt(match.groups!['month'])
           // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
           const day = Number.parseInt(match.groups!['day'])
-          return Result.success(new Date(year, month - 1, day)) // month starts at zero...
+          return Result.success(new Date(Date.UTC(year, month - 1, day))) // month starts at zero...
         }
       }
       return Result.error(`unable to parse ${input} into a Date`)
     }
-    const CustomDate = custom(customDateDecoder)
+
+    const CustomDate = custom(customDateDecoder, (d) => d.toISOString())
 
     test('custom decoder inference', () => {
       type Expected = Date
@@ -863,15 +865,33 @@ if (import.meta.vitest) {
     })
 
     test.each([
-      ['2024-11-18', new Date(2024, 10, 18)],
-      ['11/18/2024', new Date(2024, 10, 18)],
-      ['11_18_2024', new Date(2024, 10, 18)],
-    ])('custom decoder functionality', (input, expected) => {
-      const result = CustomDate.decode(input)
-      expect(Result.isSuccess(result))
+      [
+        '2024-11-18',
+        new Date(Date.UTC(2024, 10, 18)),
+        '2024-11-18T00:00:00.000Z',
+      ],
+      [
+        '11/18/2024',
+        new Date(Date.UTC(2024, 10, 18)),
+        '2024-11-18T00:00:00.000Z',
+      ],
+      [
+        '11_18_2024',
+        new Date(Date.UTC(2024, 10, 18)),
+        '2024-11-18T00:00:00.000Z',
+      ],
+    ])(
+      'custom decoder functionality',
+      (input, decodeExpected, encodeExpected) => {
+        const result = CustomDate.decode(input)
+        expect(Result.isSuccess(result))
 
-      const actual = unsafeUnwrap(result)
-      expect(actual).toStrictEqual(expected)
-    })
+        const actual = unsafeUnwrap(result)
+        expect(actual).toStrictEqual(decodeExpected)
+
+        const encoded = CustomDate.encode(actual)
+        expect(encoded).toStrictEqual(encodeExpected)
+      },
+    )
   })
 }
