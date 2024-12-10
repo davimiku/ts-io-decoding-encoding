@@ -7,6 +7,13 @@ export default tseslint.config(
   {
     rules: {
       '@typescript-eslint/no-unsafe-calls': 'off',
+      '@typescript-eslint/restrict-template-expressions': [
+        'error',
+        {
+          allowNumber: true,
+          allowBoolean: true,
+        },
+      ],
       '@typescript-eslint/no-unused-vars': [
         'error',
         {
