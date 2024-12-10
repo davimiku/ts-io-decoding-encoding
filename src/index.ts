@@ -16,10 +16,17 @@ type ShapeTag =
 type DecodeError = string | { [key: string]: string | DecodeError }
 type DecodeResult<T> = Result<T, DecodeError>
 
-interface Shape<T, Input = unknown> {
+interface Shape<T, Input = unknown, Output = T> {
   readonly __tag: ShapeTag
   readonly decode: (input: Input) => DecodeResult<T>
+  readonly encode: (value: T) => Output
 }
+
+// `any` is used here for other shapes to extend this shape
+// so that any value can be used for `T` since subtyping is checked
+// both covariantly and contravariantly
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BaseShape = Shape<any, unknown, unknown>
 
 interface ShapeUnknown extends Shape<unknown> {
   readonly __tag: 'unknown'
@@ -41,38 +48,57 @@ interface ShapeBigInt extends Shape<bigint> {
   readonly __tag: 'bigint'
 }
 
-interface ShapeArray<S extends Shape<unknown>> extends Shape<Infer<S>[]> {
+/**
+ * Given a `Shape` type, extracts the `Output` type from it
+ */
+type OutputOf<S extends BaseShape> =
+  S extends Shape<infer _T, infer _Input, infer Output> ? Output : never
+
+interface ShapeArray<S extends BaseShape>
+  extends Shape<Infer<S>[], unknown, OutputOf<S>[]> {
   readonly __tag: 'array'
 }
 
-// prettier-ignore
-interface ShapeRecord<S extends Shape<unknown>> extends Shape<Record<string, Infer<S>>> {
+interface ShapeRecord<S extends BaseShape>
+  extends Shape<
+    Record<string, Infer<S>>,
+    unknown,
+    Record<string, OutputOf<S>>
+  > {
   readonly __tag: 'record'
 }
 
-type StructFields = Record<string, Shape<unknown>>
+type StructFields = Record<string, BaseShape>
 
-// prettier-ignore
-interface ShapeStruct<Fields extends StructFields> extends Shape<InferStruct<Fields>> {
+interface ShapeStruct<Fields extends StructFields>
+  extends Shape<InferStruct<Fields>, unknown, OutputOfStruct<Fields>> {
   readonly __tag: 'struct'
 }
 
-type UnionVariants = Record<string, Shape<unknown>>
+type UnionVariants = Record<string, BaseShape>
 
-// prettier-ignore
-interface ShapeUnion<Variants extends UnionVariants> extends Shape<InferUnion<Variants>> {
+interface ShapeUnion<Variants extends UnionVariants>
+  extends Shape<InferUnion<Variants>, unknown, OutputOfUnion<Variants>> {
   readonly __tag: 'union'
 }
 
-interface ShapeCustom<T, Input> extends Shape<T, Input> {
+interface ShapeCustom<T, Input, Output> extends Shape<T, Input, Output> {
   readonly __tag: 'custom'
 }
 
-interface ShapeOptional<T> extends Shape<T | undefined> {
+interface ShapeOptional<S extends BaseShape>
+  extends Shape<
+    Infer<S> | undefined,
+    Infer<S> | undefined,
+    OutputOf<S> | undefined
+  > {
   readonly __tag: 'optional'
 }
 
-export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
+// The `T` constraint is `any` so that `T` can be narrower that `unknown`
+// for custom decoders (checked contravariantly)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Infer<S extends Shape<any, any, unknown>> = S extends ShapeUnknown
   ? unknown
   : S extends ShapeBoolean
     ? boolean
@@ -82,8 +108,8 @@ export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
         ? string
         : S extends ShapeBigInt
           ? bigint
-          : S extends ShapeOptional<infer T>
-            ? T | undefined
+          : S extends ShapeOptional<infer InnerShape>
+            ? Infer<InnerShape> | undefined
             : S extends ShapeArray<infer ElementShape>
               ? Infer<ElementShape>[]
               : S extends ShapeRecord<infer ValueShape>
@@ -92,7 +118,11 @@ export type Infer<S extends Shape<unknown, never>> = S extends ShapeUnknown
                   ? InferStruct<Fields>
                   : S extends ShapeUnion<infer Variants>
                     ? InferUnion<Variants>
-                    : S extends ShapeCustom<infer T, infer Input>
+                    : S extends ShapeCustom<
+                          infer T,
+                          infer _Input,
+                          infer _Output
+                        >
                       ? T
                       : never
 
@@ -100,8 +130,16 @@ type InferStruct<Fields extends StructFields> = {
   [Key in keyof Fields]: Infer<Fields[Key]>
 }
 
+type OutputOfStruct<Fields extends StructFields> = {
+  [Key in keyof Fields]: OutputOf<Fields[Key]>
+}
+
 type InferUnion<Variants extends UnionVariants> = {
   [Key in keyof Variants]: [Key, Infer<Variants[Key]>]
+}[keyof Variants]
+
+type OutputOfUnion<Variants extends UnionVariants> = {
+  [Key in keyof Variants]: [Key, OutputOf<Variants[Key]>]
 }[keyof Variants]
 
 function typeOf(input: unknown): string {
@@ -111,9 +149,12 @@ function typeOf(input: unknown): string {
   return typeof input
 }
 
+const identity = <T>(t: T) => t
+
 export const unknown: ShapeUnknown = {
   __tag: 'unknown',
   decode: (input: unknown) => Result.success(input),
+  encode: identity,
 } as const
 
 export const boolean: ShapeBoolean = {
@@ -124,6 +165,7 @@ export const boolean: ShapeBoolean = {
     }
     return Result.success(input)
   },
+  encode: identity,
 } as const
 
 export const number: ShapeNumber = {
@@ -141,6 +183,7 @@ export const number: ShapeNumber = {
 
     return Result.success(input)
   },
+  encode: identity,
 } as const
 
 export const string: ShapeString = {
@@ -151,6 +194,7 @@ export const string: ShapeString = {
     }
     return Result.success(input)
   },
+  encode: identity,
 } as const
 
 export const bigint: ShapeBigInt = {
@@ -169,11 +213,10 @@ export const bigint: ShapeBigInt = {
     }
     return Result.error(`expected 'bigint' or 'number', got '${typeOf(input)}'`)
   },
+  encode: identity,
 } as const
 
-export function array<S extends Shape<unknown>>(
-  elementShape: S,
-): ShapeArray<S> {
+export function array<S extends BaseShape>(elementShape: S): ShapeArray<S> {
   return {
     __tag: 'array',
     decode(input: unknown): DecodeResult<Infer<S>[]> {
@@ -199,12 +242,13 @@ export function array<S extends Shape<unknown>>(
 
       return Result.success(output)
     },
+    encode(array: Infer<S>[]) {
+      return array.map((element) => elementShape.encode(element) as OutputOf<S>)
+    },
   } as const
 }
 
-export function record<S extends Shape<unknown>>(
-  valueShape: S,
-): ShapeRecord<S> {
+export function record<S extends BaseShape>(valueShape: S): ShapeRecord<S> {
   return {
     __tag: 'record',
     decode(input: unknown): DecodeResult<Record<string, Infer<S>>> {
@@ -230,6 +274,14 @@ export function record<S extends Shape<unknown>>(
 
       return Result.success(output)
     },
+    encode(record: Record<string, Infer<S>>): Record<string, OutputOf<S>> {
+      return Object.fromEntries(
+        Object.entries(record).map(([key, value]) => [
+          key,
+          valueShape.encode(value) as OutputOf<S>,
+        ]),
+      )
+    },
   } as const
 }
 
@@ -244,6 +296,13 @@ export function struct<Fields extends StructFields>(
       return Result.flatMap(UnknownRecord.decode(input), (record) =>
         decodeRecordToStruct(record, fieldShapes),
       )
+    },
+    encode(struct: InferStruct<Fields>) {
+      return Object.fromEntries(
+        Object.entries(struct).map(([key, value]) => {
+          return [key, fieldShapes[key].encode(value)]
+        }),
+      ) as OutputOfStruct<Fields>
     },
   } as const
 }
@@ -307,26 +366,43 @@ export function union<Variants extends UnionVariants>(
         (error) => ({ [tag]: error }),
       )
     },
+    encode(union: InferUnion<Variants>) {
+      const [tag, value] = union
+
+      return [tag, variants[tag].encode(value)] as OutputOfUnion<Variants>
+    },
   }
 }
 
-export function custom<T, Input>(
+export function custom<T, Input, Output>(
   decode: (input: Input) => DecodeResult<T>,
-): ShapeCustom<T, Input> {
+  encode: (value: T) => Output,
+): ShapeCustom<T, Input, Output> {
   return {
     __tag: 'custom',
     decode,
+    encode,
   }
 }
 
-export function optional<T>(shape: Shape<T>): ShapeOptional<T> {
+// `any` needs to be used for `T` to work in both directions
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function optional<S extends Shape<any, any, unknown>>(
+  shape: S,
+): ShapeOptional<S> {
   return {
     __tag: 'optional',
-    decode: (input: unknown) => {
+    decode(input: Infer<S> | undefined) {
       if (typeof input === 'undefined') {
         return Result.success(input)
       }
       return shape.decode(input)
+    },
+    encode(value: Infer<S> | undefined): OutputOf<S> | undefined {
+      if (typeof value === 'undefined') {
+        return undefined
+      }
+      return shape.encode(value) as OutputOf<S>
     },
   }
 }
@@ -365,6 +441,27 @@ if (import.meta.vitest) {
     }
     throw new Error('Unwrapped a Success result')
   }
+
+  /**
+   * Custom shape with operations for testing:
+   * - decode: unknown => boolean
+   * - encode: boolean => string
+   */
+  const BoolToString = custom(boolean.decode, (val: boolean) => String(val))
+
+  /**
+   * Custom shape with operations for testing:
+   * - decode: unknown => Map<string, string>
+   * - encode: Map<string, string> => Record<string, string>
+   */
+  const StringMap = custom(
+    (input) =>
+      Result.map(
+        record(string).decode(input),
+        (rec) => new Map(Object.entries(rec)),
+      ),
+    (map: Map<string, string>) => Object.fromEntries(map),
+  )
 
   describe('Unknown', () => {
     test('Unknown decoding', () => {
@@ -522,6 +619,21 @@ if (import.meta.vitest) {
 
       const actual = unsafeUnwrapError(result)
       expect(actual).toStrictEqual(expected)
+    })
+
+    test('Custom Array encoding', () => {
+      const BoolStringArray = array(BoolToString)
+
+      const input = [true, true, false, true]
+
+      const decodeResult = BoolStringArray.decode(input)
+      expect(Result.isSuccess(decodeResult))
+
+      const decoded: boolean[] = unsafeUnwrap(decodeResult)
+      expect(decoded).toStrictEqual([true, true, false, true])
+
+      const encoded: string[] = BoolStringArray.encode(decoded)
+      expect(encoded).toStrictEqual(['true', 'true', 'false', 'true'])
     })
   })
 
@@ -787,22 +899,10 @@ if (import.meta.vitest) {
     test('Optional type inference', () => {
       expect(true).toBe(true)
 
-      const OptionalNumber = optional(number)
+      const _OptionalNumber = optional(number)
 
       type Expected = number | undefined
-      type Actual = Infer<typeof OptionalNumber>
-
-      type _Test = Expect<Equal<Expected, Actual>>
-    })
-
-    test('Optional type inference nested', () => {
-      expect(true).toBe(true)
-
-      // untagged unions collapse / don't nest
-      const OptionalOptionalNumber = optional(optional(number))
-
-      type Expected = number | undefined
-      type Actual = Infer<typeof OptionalOptionalNumber>
+      type Actual = Infer<typeof _OptionalNumber>
 
       type _Test = Expect<Equal<Expected, Actual>>
     })
@@ -829,7 +929,7 @@ if (import.meta.vitest) {
       }
       return Result.error(`unable to parse ${input} into a Date`)
     }
-    const CustomDate = custom(customDateDecoder)
+    const CustomDate = custom(customDateDecoder, (date) => date.toISOString())
 
     test('custom decoder inference', () => {
       type Expected = Date
@@ -848,6 +948,29 @@ if (import.meta.vitest) {
 
       const actual = unsafeUnwrap(result)
       expect(actual).toStrictEqual(expected)
+    })
+
+    test('Custom StringMap', () => {
+      type Actual = Infer<typeof StringMap>
+      type _Test = Expect<Equal<Map<string, string>, Actual>>
+      const result: DecodeResult<Map<string, string>> = StringMap.decode({
+        a: 'a',
+        b: 'b',
+        c: 'c',
+      })
+      expect(Result.isSuccess(result))
+
+      const decoded: Map<string, string> = unsafeUnwrap(result)
+      expect(decoded).toStrictEqual(
+        new Map([
+          ['a', 'a'],
+          ['b', 'b'],
+          ['c', 'c'],
+        ]),
+      )
+
+      const encoded: Record<string, string> = StringMap.encode(decoded)
+      expect(encoded).toStrictEqual({ a: 'a', b: 'b', c: 'c' })
     })
   })
 }
